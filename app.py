@@ -1,21 +1,16 @@
-'''# Importando bibliotecas necessárias
 import requests
 import pandas as pd
 from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from termcolor import colored
 import time
-import psycopg2
-from sqlalchemy import create_engine
-from sqlalchemy.exc import IntegrityError
 
 # Definindo constantes globais
-DATA_INICIAL = "2024-07-01"
+DATA_INICIAL = (datetime.today() - pd.Timedelta(days=1)).strftime('%Y-%m-%d')  # 1 dia atrás
 TODAY = datetime.today().strftime('%Y-%m-%d')
 BASE_URL = "http://hidro.tach.com.br/exportar.php?id={}&data1={}&data2={}"
 USERNAME = "brk"
 PASSWORD = "saneatins"
-TEMPO_ESPERA = 60
+TEMPO_ESPERA = 5
 CABECALHOS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0'
 }
@@ -116,14 +111,18 @@ lista_barragens = [
     ("237", "Operacional 03"),
     ("236", "Centro De Reservação"),
     ("235", "ETE Santa Fe"),
-    ("234", "ETE Aureny")]
+    ("234", "ETE Aureny")
+]
 
-lista_barragens = [
-    ("175", "Barragem São João"),]
+# Inicializando a lista para armazenar os DataFrames de cada barragem
+dfs = []
 
-# Coleta de dados paralela das barragens
-with ThreadPoolExecutor(max_workers=1) as executor:
-    dfs = list(executor.map(obter_dados, lista_barragens))
+# Coletando os dados para cada barragem, uma de cada vez
+for barragem in lista_barragens:
+    df_barragem = obter_dados(barragem)
+    if df_barragem is not None:
+        dfs.append(df_barragem)
+    time.sleep(TEMPO_ESPERA)  # Esperando um pouco entre as requisições
 
 # Consolidação dos dados coletados em um único DataFrame
 resultado_final = pd.concat(dfs, ignore_index=True)
@@ -131,54 +130,98 @@ resultado_final = pd.concat(dfs, ignore_index=True)
 # Apresentação dos primeiros dados consolidados
 print(colored("\nDados combinados de todas as barragens:\n", "blue"), resultado_final.head())
 
+# Limpeza dos dados e conversões
 resultado_final = resultado_final.dropna(subset=["Data e Hora"])
 resultado_final["Nível (m)"] = resultado_final["Nível (m)"] / 100
 
 # Salvando os dados processados em um arquivo CSV
 print(colored("\nSalvando dados em 'retilineo2.csv'...", "cyan"))
 resultado_final.to_csv('retilineo.csv', index=False)
-print(colored("Dados salvos em 'retilineo.csv'!", "green")) '''
+print(colored("Dados salvos em 'retilineo.csv'!", "green"))
 
 
 
 
-# Função para salvar os dados no banco de dados
-# Configurações do banco de dados
+# Ajustar nomes das colunas para compatibilidade com o banco
+resultado_final.columns = ["barragem", "Data e Hora", "Nível (m)", "Volume (mm)"]
+
+def converter_tipos(resultado_final):
+    # Converter a coluna 'barragem' para string
+    resultado_final["barragem"] = resultado_final["barragem"].astype(str)
+
+    # Converter a coluna 'Data e Hora' para datetime
+    resultado_final["Data e Hora"] = pd.to_datetime(resultado_final["Data e Hora"], errors='coerce')
+
+    # Converter a coluna 'Nível (m)' para float
+    resultado_final["Nível (m)"] = pd.to_numeric(resultado_final["Nível (m)"], errors='coerce')
+
+    # Converter a coluna 'Volume (mm)' para float
+    resultado_final["Volume (mm)"] = pd.to_numeric(resultado_final["Volume (mm)"], errors='coerce')
+
+    # Imprimir os tipos de dados após a conversão
+    print("\n📄 Tipos de dados após conversão:")
+    print(resultado_final.dtypes)
+
+    return resultado_final
+
+# Chamar a função para converter os tipos no DataFrame
+resultado_final = converter_tipos(resultado_final)
+
+# Imprimir os dados ajustados
+print("\n📄 Dados ajustados para inserção no banco (primeiras linhas):")
+print(resultado_final.head())
+
+# Função para inserir dados com INSERT INTO
 import psycopg2
+from psycopg2 import sql
 
-def conect():
-    # Connection strisableing
+def salvar_dados_com_insert(resultado_final, tabela="dados_barragens"):
     conn_str = 'postgresql://postgres:7sw0F2MNx0ObN32g@singly-light-topi.data-1.use1.tembo.io:5432/postgres'
 
     try:
-        # Create a new database session
+        # Criar conexão com psycopg2
         conn = psycopg2.connect(conn_str)
-        print("Connected to the database successfully.")
+        cursor = conn.cursor()
+        print("\n🔗 Conectado ao banco de dados com psycopg2.")
 
-        # Create a new cursor object.
-        cur = conn.cursor()
+        # Criar uma lista de tuplas para inserção
+        dados_para_inserir = []
+        for _, row in resultado_final.iterrows():
+            dados_para_inserir.append((
+                row["barragem"], 
+                row["Data e Hora"], 
+                row["Nível (m)"], 
+                row["Volume (mm)"]
+            ))
 
-        # Test Query
-        cur.execute("SELECT 1")
+        # Verificar e inserir dados um por um, evitando duplicação
+        for dados in dados_para_inserir:
+            barragem, data_e_hora, nivel_m, volume_mm = dados
 
-        # Fetch result
-        output = cur.fetchone()[0]
-        print(output)
-        
+            # Verificar se a combinação de 'Data e Hora' e 'barragem' já existe no banco
+            query_check = """
+            SELECT 1 FROM {tabela} WHERE "Data e Hora" = %s AND barragem = %s
+            """
+            cursor.execute(sql.SQL(query_check).format(tabela=sql.Identifier(tabela)), (data_e_hora, barragem))
+
+            if cursor.fetchone() is None:  # Se não encontrar, insere os dados
+                query_insert = """
+                INSERT INTO {tabela} (barragem, "Data e Hora", "Nível (m)", "Volume (mm)")
+                VALUES (%s, %s, %s, %s)
+                """
+                cursor.execute(sql.SQL(query_insert).format(tabela=sql.Identifier(tabela)), dados)
+                print(f"✅ Linha inserida: {dados}")
+            else:
+                print(f"⚠️ Dados já existem para: {dados}. Pulando inserção.")
+
+        conn.commit()  # Confirmar as alterações no banco de dados
+        print(f"✅ Inserção concluída sem duplicações.")
+
     except Exception as e:
-        print(f"Unable to connect to the database or execute query: {e}")
-    
+        print(f"\n❌ Ocorreu um erro ao inserir os dados: {e}")
     finally:
-        # Ensure cursor and connection are closed only if they were opened
-        if cur:
-            cur.close()
-        if conn:
-            conn.close()
-        print("Connection and cursor closed.")
+        cursor.close()
+        conn.close()
 
-# Call the function
-conect()
-
-
-
-
+# Chamar a função para salvar os dados
+salvar_dados_com_insert(resultado_final)
