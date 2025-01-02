@@ -4,7 +4,7 @@ from datetime import datetime
 from termcolor import colored
 import time
 
-# Definindo constantes globais
+# Definindo constantes globais gg
 DATA_INICIAL = (datetime.today() - pd.Timedelta(days=1)).strftime('%Y-%m-%d')  # 1 dia atrás
 TODAY = datetime.today().strftime('%Y-%m-%d')
 BASE_URL = "http://hidro.tach.com.br/exportar.php?id={}&data1={}&data2={}"
