@@ -147,8 +147,8 @@ print(colored("Dados salvos em 'retilineo.csv'!", "green")) '''
 import psycopg2
 
 def conect():
-    # Connection string
-    conn_str = 'postgresql://postgres:7sw0F2MNx0ObN32g@singly-light-topi.data-1.use1.tembo.io:5432/postgres?sslmode=disable'
+    # Connection strisableing
+    conn_str = 'postgresql://postgres:7sw0F2MNx0ObN32g@singly-light-topi.data-1.use1.tembo.io:5432/postgres'
 
     try:
         # Create a new database session
