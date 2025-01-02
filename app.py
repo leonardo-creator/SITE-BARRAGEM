@@ -1,81 +1,22 @@
+from flask import Flask, jsonify
 import requests
 import pandas as pd
 from datetime import datetime
-from termcolor import colored
 import time
+import psycopg2
+from psycopg2 import sql
 
-# Definindo constantes globais gg
-DATA_INICIAL = (datetime.today() - pd.Timedelta(days=1)).strftime('%Y-%m-%d')  # 1 dia atrás
+app = Flask(__name__)
+
+# Definindo constantes globais
+DATA_INICIAL = (datetime.today() - pd.Timedelta(days=1)).strftime('%Y-%m-%d')
 TODAY = datetime.today().strftime('%Y-%m-%d')
 BASE_URL = "http://hidro.tach.com.br/exportar.php?id={}&data1={}&data2={}"
 USERNAME = "brk"
 PASSWORD = "saneatins"
 TEMPO_ESPERA = 5
-CABECALHOS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0'
-}
-
-def obter_dados(barragem):
-    """Função para coletar dados de uma barragem específica."""
-    barragemID, barragemNome = barragem
-
-    # Construindo URLs
-    url_nivel = BASE_URL.format(barragemID, DATA_INICIAL, TODAY) + "&tipo=nivel"
-    url_chuva = BASE_URL.format(barragemID, DATA_INICIAL, TODAY) + "&tipo=chuva"
-    auth = (USERNAME, PASSWORD)
-
-    # Realizando a requisição para obter dados de nível
-    try:
-        print(colored(f"Buscando dados de nível da barragem {barragemNome} ...", "yellow"))
-        response_nivel = requests.get(url_nivel, auth=auth, headers=CABECALHOS, timeout=TEMPO_ESPERA)
-        response_nivel.raise_for_status()
-        table_nivel = pd.read_html(response_nivel.text)[0]
-        print(colored(f"Dados brutos da barragem {barragemNome} (Nível):\n", "green"), table_nivel.head())
-    except Exception as e:
-        print(colored(f"Erro ao obter dados de nível da barragem {barragemNome}: {e}", "red"))
-        return None
-
-    # Realizando a requisição para obter dados de chuva
-    try:
-        print(colored(f"Buscando dados de chuva da barragem {barragemNome} ...", "yellow"))
-        response_chuva = requests.get(url_chuva, auth=auth, headers=CABECALHOS, timeout=TEMPO_ESPERA)
-        response_chuva.raise_for_status()
-        table_chuva = pd.read_html(response_chuva.text)[0]
-        print(colored(f"Dados brutos da barragem {barragemNome} (Chuva):\n", "green"), table_chuva.head())
-    except Exception as e:
-        print(colored(f"Erro ao obter dados de chuva da barragem {barragemNome}: {e}", "red"))
-        return None
-
-    # Processando e limpando os dados
-    table_nivel.columns = ["Código Estação", "Data e Hora", "Nível (m)"]
-    table_chuva.columns = ["Código Estação", "Data e Hora", "Volume (mm)"]
-    table_nivel.dropna(inplace=True)
-    table_chuva.dropna(inplace=True)
-    merged = pd.merge(table_nivel, table_chuva, on="Data e Hora", how="left")
-
-    # Convertendo a coluna "Data e Hora" para o tipo datetime
-    def try_convert(date_str):
-        try:
-            return pd.to_datetime(date_str, format="%d/%m/%Y %H:%M:%S", dayfirst=True)
-        except:
-            return pd.NaT
-
-    merged["Data e Hora"] = merged["Data e Hora"].apply(try_convert)
-    merged.dropna(subset=["Data e Hora"], inplace=True)
-
-    # Completando o dataframe com informações adicionais
-    merged["BARRAGEM"] = barragemNome
-    merged = merged[["BARRAGEM", "Data e Hora", "Nível (m)", "Volume (mm)"]]
-    merged["Nível (m)"] = merged["Nível (m)"].astype(float)
-    merged["Volume (mm)"] = merged["Volume (mm)"].astype(float)
-
-    print(colored(f"Dados da barragem {barragemNome} coletados e processados com sucesso!", "green"))
-
-    return merged
-
-
-# Inicializando a coleta de dados
-print(colored("\nIniciando coleta de dados...", "cyan"))
+CABECALHOS = {'User-Agent': 'Mozilla/5.0'}
+CONN_STR = 'postgresql://postgres:7sw0F2MNx0ObN32g@singly-light-topi.data-1.use1.tembo.io:5432/postgres'
 
 # Lista de barragens
 lista_barragens = [
@@ -114,114 +55,77 @@ lista_barragens = [
     ("234", "ETE Aureny")
 ]
 
-# Inicializando a lista para armazenar os DataFrames de cada barragem
-dfs = []
-
-# Coletando os dados para cada barragem, uma de cada vez
-for barragem in lista_barragens:
-    df_barragem = obter_dados(barragem)
-    if df_barragem is not None:
-        dfs.append(df_barragem)
-    time.sleep(TEMPO_ESPERA)  # Esperando um pouco entre as requisições
-
-# Consolidação dos dados coletados em um único DataFrame
-resultado_final = pd.concat(dfs, ignore_index=True)
-
-# Apresentação dos primeiros dados consolidados
-print(colored("\nDados combinados de todas as barragens:\n", "blue"), resultado_final.head())
-
-# Limpeza dos dados e conversões
-resultado_final = resultado_final.dropna(subset=["Data e Hora"])
-resultado_final["Nível (m)"] = resultado_final["Nível (m)"] / 100
-
-# Salvando os dados processados em um arquivo CSV
-print(colored("\nSalvando dados em 'retilineo2.csv'...", "cyan"))
-resultado_final.to_csv('retilineo.csv', index=False)
-print(colored("Dados salvos em 'retilineo.csv'!", "green"))
-
-
-
-
-# Ajustar nomes das colunas para compatibilidade com o banco
-resultado_final.columns = ["barragem", "Data e Hora", "Nível (m)", "Volume (mm)"]
-
-def converter_tipos(resultado_final):
-    # Converter a coluna 'barragem' para string
-    resultado_final["barragem"] = resultado_final["barragem"].astype(str)
-
-    # Converter a coluna 'Data e Hora' para datetime
-    resultado_final["Data e Hora"] = pd.to_datetime(resultado_final["Data e Hora"], errors='coerce')
-
-    # Converter a coluna 'Nível (m)' para float
-    resultado_final["Nível (m)"] = pd.to_numeric(resultado_final["Nível (m)"], errors='coerce')
-
-    # Converter a coluna 'Volume (mm)' para float
-    resultado_final["Volume (mm)"] = pd.to_numeric(resultado_final["Volume (mm)"], errors='coerce')
-
-    # Imprimir os tipos de dados após a conversão
-    print("\n📄 Tipos de dados após conversão:")
-    print(resultado_final.dtypes)
-
-    return resultado_final
-
-# Chamar a função para converter os tipos no DataFrame
-resultado_final = converter_tipos(resultado_final)
-
-# Imprimir os dados ajustados
-print("\n📄 Dados ajustados para inserção no banco (primeiras linhas):")
-print(resultado_final.head())
-
-# Função para inserir dados com INSERT INTO
-import psycopg2
-from psycopg2 import sql
-
-def salvar_dados_com_insert(resultado_final, tabela="dados_barragens"):
-    conn_str = 'postgresql://postgres:7sw0F2MNx0ObN32g@singly-light-topi.data-1.use1.tembo.io:5432/postgres'
+def obter_dados(barragem):
+    """Função para coletar dados de uma barragem específica."""
+    barragemID, barragemNome = barragem
+    url_nivel = BASE_URL.format(barragemID, DATA_INICIAL, TODAY) + "&tipo=nivel"
+    url_chuva = BASE_URL.format(barragemID, DATA_INICIAL, TODAY) + "&tipo=chuva"
+    auth = (USERNAME, PASSWORD)
 
     try:
-        # Criar conexão com psycopg2
-        conn = psycopg2.connect(conn_str)
+        response_nivel = requests.get(url_nivel, auth=auth, headers=CABECALHOS, timeout=TEMPO_ESPERA)
+        response_nivel.raise_for_status()
+        table_nivel = pd.read_html(response_nivel.text)[0]
+    except Exception as e:
+        return f"Erro ao obter dados de nível da barragem {barragemNome}: {e}", None
+
+    try:
+        response_chuva = requests.get(url_chuva, auth=auth, headers=CABECALHOS, timeout=TEMPO_ESPERA)
+        response_chuva.raise_for_status()
+        table_chuva = pd.read_html(response_chuva.text)[0]
+    except Exception as e:
+        return f"Erro ao obter dados de chuva da barragem {barragemNome}: {e}", None
+
+    # Processamento dos dados
+    table_nivel.columns = ["Código Estação", "Data e Hora", "Nível (m)"]
+    table_chuva.columns = ["Código Estação", "Data e Hora", "Volume (mm)"]
+    merged = pd.merge(table_nivel, table_chuva, on="Data e Hora", how="left")
+    merged["Data e Hora"] = pd.to_datetime(merged["Data e Hora"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
+    merged["BARRAGEM"] = barragemNome
+    merged = merged[["BARRAGEM", "Data e Hora", "Nível (m)", "Volume (mm)"]]
+
+    return None, merged
+
+def salvar_dados_com_insert(df, tabela="dados_barragens"):
+    """Função para salvar dados no banco de dados."""
+    try:
+        conn = psycopg2.connect(CONN_STR)
         cursor = conn.cursor()
-        print("\n🔗 Conectado ao banco de dados com psycopg2.")
-
-        # Criar uma lista de tuplas para inserção
-        dados_para_inserir = []
-        for _, row in resultado_final.iterrows():
-            dados_para_inserir.append((
-                row["barragem"], 
-                row["Data e Hora"], 
-                row["Nível (m)"], 
-                row["Volume (mm)"]
-            ))
-
-        # Verificar e inserir dados um por um, evitando duplicação
-        for dados in dados_para_inserir:
-            barragem, data_e_hora, nivel_m, volume_mm = dados
-
-            # Verificar se a combinação de 'Data e Hora' e 'barragem' já existe no banco
-            query_check = """
-            SELECT 1 FROM {tabela} WHERE "Data e Hora" = %s AND barragem = %s
-            """
-            cursor.execute(sql.SQL(query_check).format(tabela=sql.Identifier(tabela)), (data_e_hora, barragem))
-
-            if cursor.fetchone() is None:  # Se não encontrar, insere os dados
-                query_insert = """
+        for _, row in df.iterrows():
+            dados = (row["BARRAGEM"], row["Data e Hora"], row["Nível (m)"], row["Volume (mm)"])
+            query_check = f"""SELECT 1 FROM {tabela} WHERE "Data e Hora" = %s AND barragem = %s"""
+            cursor.execute(query_check, (row["Data e Hora"], row["BARRAGEM"]))
+            if cursor.fetchone() is None:
+                query_insert = f"""
                 INSERT INTO {tabela} (barragem, "Data e Hora", "Nível (m)", "Volume (mm)")
                 VALUES (%s, %s, %s, %s)
                 """
-                cursor.execute(sql.SQL(query_insert).format(tabela=sql.Identifier(tabela)), dados)
-                print(f"✅ Linha inserida: {dados}")
-            else:
-                print(f"⚠️ Dados já existem para: {dados}. Pulando inserção.")
-
-        conn.commit()  # Confirmar as alterações no banco de dados
-        print(f"✅ Inserção concluída sem duplicações.")
-
+                cursor.execute(query_insert, dados)
+        conn.commit()
     except Exception as e:
-        print(f"\n❌ Ocorreu um erro ao inserir os dados: {e}")
+        return f"Erro ao salvar dados no banco: {e}"
     finally:
         cursor.close()
         conn.close()
+    return None
 
-# Chamar a função para salvar os dados
-salvar_dados_com_insert(resultado_final)
+@app.route('/coletar', methods=['GET'])
+def coletar():
+    """Rota para iniciar a coleta de dados."""
+    resultados = []
+    for barragem in lista_barragens:
+        erro, df = obter_dados(barragem)
+        if erro:
+            resultados.append(erro)
+        elif df is not None:
+            erro_bd = salvar_dados_com_insert(df)
+            if erro_bd:
+                resultados.append(erro_bd)
+            else:
+                resultados.append(f"Dados da barragem {barragem[1]} salvos com sucesso.")
+        time.sleep(TEMPO_ESPERA)
+
+    return jsonify(resultados), 200
+
+if __name__ == '__main__':
+    app.run(debug=True)
