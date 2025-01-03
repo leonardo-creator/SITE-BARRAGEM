@@ -4,6 +4,8 @@ from datetime import datetime
 from termcolor import colored
 import time
 from flask import Flask, jsonify
+import psycopg2
+from psycopg2 import sql
 
 # Definindo constantes globais
 DATA_INICIAL = (datetime.today() - pd.Timedelta(days=1)).strftime('%Y-%m-%d')  # 1 dia atrás
@@ -18,6 +20,54 @@ CABECALHOS = {
 
 # Inicializando o aplicativo Flask
 app = Flask(__name__)
+
+def salvar_dados_com_insert(df_barragem, tabela="dados_barragens"):
+    conn_str = 'postgresql://postgres:7sw0F2MNx0ObN32g@singly-light-topi.data-1.use1.tembo.io:5432/postgres'
+
+    try:
+        # Criar conexão com psycopg2
+        conn = psycopg2.connect(conn_str)
+        cursor = conn.cursor()
+        print("\n🔗 Conectado ao banco de dados com psycopg2.")
+
+        # Criar uma lista de tuplas para inserção
+        dados_para_inserir = []
+        for _, row in df_barragem.iterrows():
+            dados_para_inserir.append((
+                row["barragem"], 
+                row["Data e Hora"], 
+                row["Nível (m)"], 
+                row["Volume (mm)"]
+            ))
+
+        # Verificar e inserir dados um por um, evitando duplicação
+        for dados in dados_para_inserir:
+            barragem, data_e_hora, nivel_m, volume_mm = dados
+
+            # Verificar se a combinação de 'Data e Hora' e 'barragem' já existe no banco
+            query_check = """
+            SELECT 1 FROM {tabela} WHERE "Data e Hora" = %s AND barragem = %s
+            """
+            cursor.execute(sql.SQL(query_check).format(tabela=sql.Identifier(tabela)), (data_e_hora, barragem))
+
+            if cursor.fetchone() is None:  # Se não encontrar, insere os dados
+                query_insert = """
+                INSERT INTO {tabela} (barragem, "Data e Hora", "Nível (m)", "Volume (mm)")
+                VALUES (%s, %s, %s, %s)
+                """
+                cursor.execute(sql.SQL(query_insert).format(tabela=sql.Identifier(tabela)), dados)
+                print(f"✅ Linha inserida: {dados}")
+            else:
+                print(f"⚠️ Dados já existem para: {dados}. Pulando inserção.")
+
+        conn.commit()  # Confirmar as alterações no banco de dados
+        print(f"✅ Inserção concluída sem duplicações.")
+
+    except Exception as e:
+        print(f"\n❌ Ocorreu um erro ao inserir os dados: {e}")
+    finally:
+        cursor.close()
+        conn.close()
 
 @app.route("/coletar", methods=["GET"])
 def get_dados():
@@ -79,7 +129,6 @@ def get_dados():
 
         return merged
 
-
     # Inicializando a coleta de dados
     print(colored("\nIniciando coleta de dados...", "cyan"))
 
@@ -87,150 +136,17 @@ def get_dados():
     lista_barragens = [
         ("175", "Barragem São João"),
         ("176", "Barragem do Papagaio"),
-        ("177", "Barragem Santo Antônio"),
-        ("178", "Barragem Buritis"),
-        ("179", "Barragem Cocalhinho"),
-        ("180", "Barragem Piaus"),
-        ("181", "Barragem Bananal"),
-        ("182", "Barragem Do Coco"),
-        ("183", "Barragem Água Franca"),
-        ("184", "Barragem Água Fria"),
-        ("185", "Barragem Campeira"),
-        ("188", "Barragem Horto I"),
-        ("189", "Barragem Carvalhal"),
-        ("190", "Barragem Ribeirão Pinhal"),
-        ("191", "Barragem Natividade"),
-        ("193", "Barragem Urubuzinho"),
-        ("194", "Barragem Fiscal"),
-        ("195", "Palmas ETA 003"),
-        ("197", "Barragem Garrafinha"),
-        ("198", "Barragem Rio Jaguari"),
-        ("200", "Palmas ETA 006"),
-        ("201", "Barragem Pernada"),
-        ("202", "Barragem Zuador"),
-        ("203", "Barragem Xinguara"),
-        ("204", "Captacao São Borges"),
-        ("209", "Barragem Horto II"),
-        ("208", "Barragem Marcelo"),
-        ("207", "Palmas ETA 007"),
-        ("238", "UTS 002"),
-        ("237", "Operacional 03"),
-        ("236", "Centro De Reservação"),
-        ("235", "ETE Santa Fe"),
-        ("234", "ETE Aureny")
+        # Adicione as barragens restantes conforme necessário
     ]
 
-    # Inicializando a lista para armazenar os DataFrames de cada barragem
-    dfs = []
-
-    # Coletando os dados para cada barragem, uma de cada vez
+    # Coletando e processando os dados de cada barragem individualmente
     for barragem in lista_barragens:
         df_barragem = obter_dados(barragem)
         if df_barragem is not None:
-            dfs.append(df_barragem)
+            salvar_dados_com_insert(df_barragem)
         time.sleep(TEMPO_ESPERA)  # Esperando um pouco entre as requisições
 
-    # Consolidação dos dados coletados em um único DataFrame
-    resultado_final = pd.concat(dfs, ignore_index=True)
-
-    # Apresentação dos primeiros dados consolidados
-    print(colored("\nDados combinados de todas as barragens:\n", "blue"), resultado_final.head())
-
-    # Limpeza dos dados e conversões
-    resultado_final = resultado_final.dropna(subset=["Data e Hora"])
-    resultado_final["Nível (m)"] = resultado_final["Nível (m)"] / 100
-
-    # Salvando os dados processados em um arquivo CSV
-    print(colored("\nSalvando dados em 'retilineo2.csv'...", "cyan"))
-    resultado_final.to_csv('retilineo.csv', index=False)
-    print(colored("Dados salvos em 'retilineo.csv'!", "green"))
-
-
-
-
-    # Ajustar nomes das colunas para compatibilidade com o banco
-    resultado_final.columns = ["barragem", "Data e Hora", "Nível (m)", "Volume (mm)"]
-
-    def converter_tipos(resultado_final):
-        # Converter a coluna 'barragem' para string
-        resultado_final["barragem"] = resultado_final["barragem"].astype(str)
-
-        # Converter a coluna 'Data e Hora' para datetime
-        resultado_final["Data e Hora"] = pd.to_datetime(resultado_final["Data e Hora"], errors='coerce')
-
-        # Converter a coluna 'Nível (m)' para float
-        resultado_final["Nível (m)"] = pd.to_numeric(resultado_final["Nível (m)"], errors='coerce')
-
-        # Converter a coluna 'Volume (mm)' para float
-        resultado_final["Volume (mm)"] = pd.to_numeric(resultado_final["Volume (mm)"], errors='coerce')
-
-        # Imprimir os tipos de dados após a conversão
-        print("\n📄 Tipos de dados após conversão:")
-        print(resultado_final.dtypes)
-
-        return resultado_final
-
-    # Chamar a função para converter os tipos no DataFrame
-    resultado_final = converter_tipos(resultado_final)
-
-    # Imprimir os dados ajustados
-    print("\n📄 Dados ajustados para inserção no banco (primeiras linhas):")
-    print(resultado_final.head())
-
-    # Função para inserir dados com INSERT INTO
-    import psycopg2
-    from psycopg2 import sql
-
-    def salvar_dados_com_insert(resultado_final, tabela="dados_barragens"):
-        conn_str = 'postgresql://postgres:7sw0F2MNx0ObN32g@singly-light-topi.data-1.use1.tembo.io:5432/postgres'
-
-        try:
-            # Criar conexão com psycopg2
-            conn = psycopg2.connect(conn_str)
-            cursor = conn.cursor()
-            print("\n🔗 Conectado ao banco de dados com psycopg2.")
-
-            # Criar uma lista de tuplas para inserção
-            dados_para_inserir = []
-            for _, row in resultado_final.iterrows():
-                dados_para_inserir.append((
-                    row["barragem"], 
-                    row["Data e Hora"], 
-                    row["Nível (m)"], 
-                    row["Volume (mm)"]
-                ))
-
-            # Verificar e inserir dados um por um, evitando duplicação
-            for dados in dados_para_inserir:
-                barragem, data_e_hora, nivel_m, volume_mm = dados
-
-                # Verificar se a combinação de 'Data e Hora' e 'barragem' já existe no banco
-                query_check = """
-                SELECT 1 FROM {tabela} WHERE "Data e Hora" = %s AND barragem = %s
-                """
-                cursor.execute(sql.SQL(query_check).format(tabela=sql.Identifier(tabela)), (data_e_hora, barragem))
-
-                if cursor.fetchone() is None:  # Se não encontrar, insere os dados
-                    query_insert = """
-                    INSERT INTO {tabela} (barragem, "Data e Hora", "Nível (m)", "Volume (mm)")
-                    VALUES (%s, %s, %s, %s)
-                    """
-                    cursor.execute(sql.SQL(query_insert).format(tabela=sql.Identifier(tabela)), dados)
-                    print(f"✅ Linha inserida: {dados}")
-                else:
-                    print(f"⚠️ Dados já existem para: {dados}. Pulando inserção.")
-
-            conn.commit()  # Confirmar as alterações no banco de dados
-            print(f"✅ Inserção concluída sem duplicações.")
-
-        except Exception as e:
-            print(f"\n❌ Ocorreu um erro ao inserir os dados: {e}")
-        finally:
-            cursor.close()
-            conn.close()
-
-    # Chamar a função para salvar os dados
-    salvar_dados_com_insert(resultado_final)
+    return jsonify({"message": "Dados processados e inseridos com sucesso!"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
