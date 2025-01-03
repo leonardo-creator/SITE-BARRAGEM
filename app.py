@@ -136,7 +136,37 @@ def get_dados():
     lista_barragens = [
         ("175", "Barragem São João"),
         ("176", "Barragem do Papagaio"),
-        # Adicione as barragens restantes conforme necessário
+        ("177", "Barragem Santo Antônio"),
+        ("178", "Barragem Buritis"),
+        ("179", "Barragem Cocalhinho"),
+        ("180", "Barragem Piaus"),
+        ("181", "Barragem Bananal"),
+        ("182", "Barragem Do Coco"),
+        ("183", "Barragem Água Franca"),
+        ("184", "Barragem Água Fria"),
+        ("185", "Barragem Campeira"),
+        ("188", "Barragem Horto I"),
+        ("189", "Barragem Carvalhal"),
+        ("190", "Barragem Ribeirão Pinhal"),
+        ("191", "Barragem Natividade"),
+        ("193", "Barragem Urubuzinho"),
+        ("194", "Barragem Fiscal"),
+        ("195", "Palmas ETA 003"),
+        ("197", "Barragem Garrafinha"),
+        ("198", "Barragem Rio Jaguari"),
+        ("200", "Palmas ETA 006"),
+        ("201", "Barragem Pernada"),
+        ("202", "Barragem Zuador"),
+        ("203", "Barragem Xinguara"),
+        ("204", "Captacao São Borges"),
+        ("209", "Barragem Horto II"),
+        ("208", "Barragem Marcelo"),
+        ("207", "Palmas ETA 007"),
+        ("238", "UTS 002"),
+        ("237", "Operacional 03"),
+        ("236", "Centro De Reservação"),
+        ("235", "ETE Santa Fe"),
+        ("234", "ETE Aureny")
     ]
 
     # Coletando e processando os dados de cada barragem individualmente
