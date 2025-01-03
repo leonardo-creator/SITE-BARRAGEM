@@ -5,6 +5,10 @@ from datetime import datetime
 import time
 import psycopg2
 from psycopg2 import sql
+import logging
+
+# Configuração de logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 app = Flask(__name__)
 
@@ -63,6 +67,7 @@ def obter_dados(barragem):
     auth = (USERNAME, PASSWORD)
 
     try:
+        logging.info(f"Coletando dados de nível para {barragemNome}")
         response_nivel = requests.get(url_nivel, auth=auth, headers=CABECALHOS, timeout=TEMPO_ESPERA)
         response_nivel.raise_for_status()
         table_nivel = pd.read_html(response_nivel.text)[0]
@@ -70,6 +75,7 @@ def obter_dados(barragem):
         return f"Erro ao obter dados de nível da barragem {barragemNome}: {e}", None
 
     try:
+        logging.info(f"Coletando dados de chuva para {barragemNome}")
         response_chuva = requests.get(url_chuva, auth=auth, headers=CABECALHOS, timeout=TEMPO_ESPERA)
         response_chuva.raise_for_status()
         table_chuva = pd.read_html(response_chuva.text)[0]
@@ -77,14 +83,17 @@ def obter_dados(barragem):
         return f"Erro ao obter dados de chuva da barragem {barragemNome}: {e}", None
 
     # Processamento dos dados
-    table_nivel.columns = ["Código Estação", "Data e Hora", "Nível (m)"]
-    table_chuva.columns = ["Código Estação", "Data e Hora", "Volume (mm)"]
-    merged = pd.merge(table_nivel, table_chuva, on="Data e Hora", how="left")
-    merged["Data e Hora"] = pd.to_datetime(merged["Data e Hora"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
-    merged["BARRAGEM"] = barragemNome
-    merged = merged[["BARRAGEM", "Data e Hora", "Nível (m)", "Volume (mm)"]]
-
-    return None, merged
+    try:
+        logging.info(f"Processando dados para {barragemNome}")
+        table_nivel.columns = ["Código Estação", "Data e Hora", "Nível (m)"]
+        table_chuva.columns = ["Código Estação", "Data e Hora", "Volume (mm)"]
+        merged = pd.merge(table_nivel, table_chuva, on="Data e Hora", how="left")
+        merged["Data e Hora"] = pd.to_datetime(merged["Data e Hora"], format="%d/%m/%Y %H:%M:%S", errors="coerce")
+        merged["BARRAGEM"] = barragemNome
+        merged = merged[["BARRAGEM", "Data e Hora", "Nível (m)", "Volume (mm)"]]
+        return None, merged
+    except Exception as e:
+        return f"Erro ao processar dados da barragem {barragemNome}: {e}", None
 
 def salvar_dados_com_insert(df, tabela="dados_barragens"):
     """Função para salvar dados no banco de dados."""
@@ -103,10 +112,11 @@ def salvar_dados_com_insert(df, tabela="dados_barragens"):
                 cursor.execute(query_insert, dados)
         conn.commit()
     except Exception as e:
+        logging.error(f"Erro ao salvar dados no banco: {e}")
         return f"Erro ao salvar dados no banco: {e}"
     finally:
-        cursor.close()
-        conn.close()
+        if 'cursor' in locals(): cursor.close()
+        if 'conn' in locals(): conn.close()
     return None
 
 @app.route('/coletar', methods=['GET'])
@@ -116,13 +126,16 @@ def coletar():
     for barragem in lista_barragens:
         erro, df = obter_dados(barragem)
         if erro:
+            logging.warning(erro)
             resultados.append(erro)
-        elif df is not None:
+        elif df is not None and not df.empty:
             erro_bd = salvar_dados_com_insert(df)
             if erro_bd:
                 resultados.append(erro_bd)
             else:
                 resultados.append(f"Dados da barragem {barragem[1]} salvos com sucesso.")
+        else:
+            resultados.append(f"Sem dados disponíveis para a barragem {barragem[1]}.")
         time.sleep(TEMPO_ESPERA)
 
     return jsonify(resultados), 200
